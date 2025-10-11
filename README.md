@@ -47,6 +47,23 @@ python main.py
 - При возникновении ошибки о превышении длины спектрограммы или метки увеличьте соответствующие параметры в интерфейсе.
 - Файл `metadata.json` теперь содержит поле `"shuffle"`, показывающее, были ли примеры перемешаны при подготовке.
 
+## Работа с готовым датасетом программно
+
+В модуле `prepared_dataset_library.py` есть функция `load_prepared_dataset`, которая открывает подготовленный набор данных в режиме `memmap` и создаёт три представления: `train`, `validation`, `test`. Массивы не загружаются целиком в оперативную память, поэтому модуль подходит для наборов размером в сотни гигабайт.
+
+Пример использования:
+
+```python
+from prepared_dataset_library import load_prepared_dataset
+
+dataset = load_prepared_dataset("prepared_output")
+print(dataset.metadata.sample_count, dataset.metadata.time_steps)
+
+for batch_indices in dataset.train.iter_indices(batch_size=16):
+	batch = dataset.train[batch_indices]
+	# batch["x_data"] и другие массивы остаются memory-map объектами
+```
+
 
 python -m venv venv
 
