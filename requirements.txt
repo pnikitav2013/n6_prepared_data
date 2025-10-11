@@ -1,0 +1,3 @@
+numpy>=1.21
+g2p_en>=2.1
+matplotlib>=3.7
