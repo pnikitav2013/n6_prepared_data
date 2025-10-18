@@ -35,7 +35,8 @@ class DatasetConfig:
     label_max_len: int = 524
     mel_bins: int = 128
     frame_duration_ms: float | None = None
-    max_workers: int | None = None
+    frames_per_step: int = 1
+    max_workers: int = 10
     shuffle: bool = False
 
 
@@ -124,6 +125,39 @@ def _ensure_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
 
 
+def _effective_logit_length(frame_count: int, frames_per_step: int) -> float:
+    if frames_per_step <= 0:
+        raise ValueError("frames_per_step must be positive")
+    return frame_count / float(frames_per_step)
+
+
+def _shrink_npy_file(path: str, dtype: str, new_shape: tuple[int, ...]) -> None:
+    """Rewrite an .npy memmap with a smaller leading dimension."""
+
+    if new_shape[0] < 0:
+        raise ValueError("new_shape must have non-negative length")
+    tmp_path = f"{path}.tmp"
+    if os.path.exists(tmp_path):
+        os.remove(tmp_path)
+
+    source = np.load(path, mmap_mode="r")
+    target: np.memmap | None = None
+    try:
+        target = open_memmap(tmp_path, mode="w+", dtype=dtype, shape=new_shape)
+        target[:] = source[: new_shape[0]]
+        target.flush()
+    finally:
+        if target is not None:
+            mmap_obj = getattr(target, "_mmap", None)
+            if mmap_obj is not None:
+                mmap_obj.close()
+        source_mmap = getattr(source, "_mmap", None)
+        if source_mmap is not None:
+            source_mmap.close()
+
+    os.replace(tmp_path, path)
+
+
 def _process_entry(payload: Tuple[int, str, str, str, int, float | None]) -> Tuple[int, np.ndarray, Sequence[int], str]:
     """Heavy lifting function executed in worker processes."""
 
@@ -144,6 +178,10 @@ def prepare_ctc_dataset(config: DatasetConfig, log: LogFn | None = None) -> int:
     """
 
     logger = log or _default_log
+    if config.frames_per_step <= 0:
+        raise DatasetPreparationError("Параметр frames_per_step должен быть положительным.")
+    frames_per_step = int(config.frames_per_step)
+
     directories, librispeech_roots = _collect_librispeech_directories(config.root_dir)
     if not directories:
         raise DatasetPreparationError("Не удалось найти папки с аудиофайлами и транскриптами.")
@@ -171,19 +209,46 @@ def prepare_ctc_dataset(config: DatasetConfig, log: LogFn | None = None) -> int:
         rng = np.random.default_rng()
         rng.shuffle(entries)
 
-    total_samples = len(entries)
-    if total_samples == 0:
+    total_entries = len(entries)
+    if total_entries == 0:
         raise DatasetPreparationError("В выбранной директории нет данных LibriSpeech.")
 
-    logger(f"Подготовка массива на {total_samples} примеров...")
-    first_audio, first_transcript, first_name = entries[0]
-    first_spectrogram, first_tokens, first_spec_params = process_audio_and_text_nornalize(
-        first_audio,
-        first_transcript,
-        mel_bins=config.mel_bins,
-        frame_duration_ms=config.frame_duration_ms,
-        return_params=True,
-    )
+    logger(f"Подготовка массива на {total_entries} примеров...")
+
+    dropped_short_inputs = 0
+
+    first_valid_index: int | None = None
+    first_spec_params: dict[str, float] | None = None
+    first_spectrogram: np.ndarray | None = None
+    first_tokens: Sequence[int] | None = None
+    first_name: str | None = None
+
+    for idx, (audio_path, transcript, sample_name) in enumerate(entries):
+        spectrogram, tokens, spec_params = process_audio_and_text_nornalize(
+            audio_path,
+            transcript,
+            mel_bins=config.mel_bins,
+            frame_duration_ms=config.frame_duration_ms,
+            return_params=True,
+        )
+        effective_length = _effective_logit_length(spectrogram.shape[0], frames_per_step)
+        if effective_length < len(tokens):
+            dropped_short_inputs += 1
+            logger(
+                f"Пропуск образца '{sample_name}': эффективная длина входа {effective_length:.2f} меньше длины меток {len(tokens)}."
+            )
+            continue
+        first_valid_index = idx
+        first_spec_params = spec_params
+        first_spectrogram = spectrogram
+        first_tokens = tokens
+        first_name = sample_name
+        break
+
+    if first_valid_index is None or first_spectrogram is None or first_tokens is None or first_name is None:
+        raise DatasetPreparationError(
+            "Все примеры были удалены: длина входной последовательности меньше длины целевой."
+        )
 
     feature_dim = first_spectrogram.shape[1]
     if first_spectrogram.shape[0] > config.time_steps:
@@ -202,11 +267,11 @@ def prepare_ctc_dataset(config: DatasetConfig, log: LogFn | None = None) -> int:
     y_len_path = os.path.join(config.output_dir, "y_label_length.npy")
     names_path = os.path.join(config.output_dir, "xy_sample_names.npy")
 
-    x_data = open_memmap(x_path, mode="w+", dtype="float32", shape=(total_samples, config.time_steps, feature_dim))
-    y_labels = open_memmap(y_path, mode="w+", dtype="int64", shape=(total_samples, config.label_max_len))
-    x_input_length = open_memmap(x_len_path, mode="w+", dtype="int64", shape=(total_samples,))
-    y_label_length = open_memmap(y_len_path, mode="w+", dtype="int64", shape=(total_samples,))
-    sample_names = open_memmap(names_path, mode="w+", dtype="S128", shape=(total_samples,))
+    x_data = open_memmap(x_path, mode="w+", dtype="float32", shape=(total_entries, config.time_steps, feature_dim))
+    y_labels = open_memmap(y_path, mode="w+", dtype="int64", shape=(total_entries, config.label_max_len))
+    x_input_length = open_memmap(x_len_path, mode="w+", dtype="int64", shape=(total_entries,))
+    y_label_length = open_memmap(y_len_path, mode="w+", dtype="int64", shape=(total_entries,))
+    sample_names = open_memmap(names_path, mode="w+", dtype="S128", shape=(total_entries,))
 
     def write_sample(index: int, spectrogram: np.ndarray, tokens: Sequence[int], sample_name: str) -> None:
         if spectrogram.shape[0] > config.time_steps:
@@ -225,8 +290,9 @@ def prepare_ctc_dataset(config: DatasetConfig, log: LogFn | None = None) -> int:
         y_label_length[index] = len(tokens)
         sample_names[index] = sample_name.encode("utf-8", "ignore")
 
-    write_sample(0, first_spectrogram, first_tokens, first_name)
-    processed = 1
+    write_position = 0
+    write_sample(write_position, first_spectrogram, first_tokens, first_name)
+    write_position += 1
 
     worker_count = config.max_workers or os.cpu_count() or 1
     worker_count = max(1, worker_count)
@@ -234,22 +300,30 @@ def prepare_ctc_dataset(config: DatasetConfig, log: LogFn | None = None) -> int:
         logger(f"Используем {worker_count} процессов для обработки аудио.")
 
     def remaining_entries() -> Iterator[Tuple[int, str, str, str, int, float | None]]:
-        for idx, (audio_path, transcript, sample_name) in enumerate(entries[1:], start=1):
+        for idx in range(first_valid_index + 1, total_entries):
+            audio_path, transcript, sample_name = entries[idx]
             yield idx, audio_path, transcript, sample_name, config.mel_bins, config.frame_duration_ms
 
-    if total_samples > 1:
+    if total_entries > 1:
         if worker_count == 1:
             for index, audio_path, transcript, sample_name, mel_bins, frame_duration_ms in remaining_entries():
-                if (index + 1) % 100 == 0 or index + 1 == total_samples:
-                    logger(f"Обработано {index + 1} / {total_samples} файлов...")
+                if (index + 1) % 100 == 0 or index + 1 == total_entries:
+                    logger(f"Обработано {index + 1} / {total_entries} файлов...")
                 spectrogram, tokens = process_audio_and_text_nornalize(
                     audio_path,
                     transcript,
                     mel_bins=mel_bins,
                     frame_duration_ms=frame_duration_ms,
                 )
-                write_sample(index, spectrogram, tokens, sample_name)
-                processed = index + 1
+                effective_length = _effective_logit_length(spectrogram.shape[0], frames_per_step)
+                if effective_length < len(tokens):
+                    dropped_short_inputs += 1
+                    logger(
+                        f"Пропуск образца '{sample_name}': эффективная длина входа {effective_length:.2f} меньше длины меток {len(tokens)}."
+                    )
+                    continue
+                write_sample(write_position, spectrogram, tokens, sample_name)
+                write_position += 1
         else:
             with ProcessPoolExecutor(max_workers=worker_count) as executor:
                 for index, spectrogram, tokens, sample_name in executor.map(
@@ -257,10 +331,17 @@ def prepare_ctc_dataset(config: DatasetConfig, log: LogFn | None = None) -> int:
                     remaining_entries(),
                     chunksize=1,
                 ):
-                    if (index + 1) % 100 == 0 or index + 1 == total_samples:
-                        logger(f"Обработано {index + 1} / {total_samples} файлов...")
-                    write_sample(index, spectrogram, tokens, sample_name)
-                    processed = max(processed, index + 1)
+                    if (index + 1) % 100 == 0 or index + 1 == total_entries:
+                        logger(f"Обработано {index + 1} / {total_entries} файлов...")
+                    effective_length = _effective_logit_length(spectrogram.shape[0], frames_per_step)
+                    if effective_length < len(tokens):
+                        dropped_short_inputs += 1
+                        logger(
+                            f"Пропуск образца '{sample_name}': эффективная длина входа {effective_length:.2f} меньше длины меток {len(tokens)}."
+                        )
+                        continue
+                    write_sample(write_position, spectrogram, tokens, sample_name)
+                    write_position += 1
 
     x_data.flush()
     y_labels.flush()
@@ -268,24 +349,50 @@ def prepare_ctc_dataset(config: DatasetConfig, log: LogFn | None = None) -> int:
     y_label_length.flush()
     sample_names.flush()
 
+    del x_data
+    del y_labels
+    del x_input_length
+    del y_label_length
+    del sample_names
+
+    valid_samples = write_position
+
+    if valid_samples <= 0:
+        raise DatasetPreparationError(
+            "После фильтрации не осталось допустимых примеров: длина входной последовательности меньше длины целевой."
+        )
+
+    if valid_samples < total_entries:
+        _shrink_npy_file(x_path, "float32", (valid_samples, config.time_steps, feature_dim))
+        _shrink_npy_file(y_path, "int64", (valid_samples, config.label_max_len))
+        _shrink_npy_file(x_len_path, "int64", (valid_samples,))
+        _shrink_npy_file(y_len_path, "int64", (valid_samples,))
+        _shrink_npy_file(names_path, "S128", (valid_samples,))
+        logger(
+            f"Удалено {total_entries - valid_samples} примеров с короткой входной последовательностью."
+        )
+
     metadata_path = os.path.join(config.output_dir, "metadata.json")
     metadata = {
         "time_steps": config.time_steps,
         "label_max_len": config.label_max_len,
         "mel_bins": config.mel_bins,
         "frame_duration_ms": config.frame_duration_ms,
-        "sample_count": processed,
+        "frames_per_step": frames_per_step,
+        "sample_count": valid_samples,
         "shuffle": bool(config.shuffle),
     }
     if first_spec_params:
         metadata["spectrogram_params"] = first_spec_params
+    if dropped_short_inputs:
+        metadata["dropped_shorter_than_label"] = dropped_short_inputs
     try:
         with open(metadata_path, "w", encoding="utf-8") as meta_file:
             json.dump(metadata, meta_file, ensure_ascii=False, indent=2)
     except Exception as exc:
         logger(f"Не удалось сохранить metadata.json: {exc}")
 
-    logger(f"Готово: обработано {processed} из {total_samples} файлов.")
+    logger(f"Готово: обработано {valid_samples} из {total_entries} файлов.")
     logger("Файлы сохранены:")
     logger(f"  {x_path}")
     logger(f"  {y_path}")
@@ -295,7 +402,7 @@ def prepare_ctc_dataset(config: DatasetConfig, log: LogFn | None = None) -> int:
     if os.path.exists(metadata_path):
         logger(f"  {metadata_path}")
 
-    return processed
+    return valid_samples
 
 
 def convert_dataset_to_phonemes(

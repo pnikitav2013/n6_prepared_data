@@ -1,15 +1,16 @@
 {
-  "root_dir": "Q:/self_pj/data_storage/test-clean",
-  "output_dir": "Q:/self_pj/data_storage/output",
-  "time_steps": "2000",
+  "root_dir": "Q:/self_pj/data_storage",
+  "output_dir": "K:/self_pj_25/py_space/data_space/128_32_x2",
+  "time_steps": "2200",
   "label_max_len": "624",
+  "frames_per_step": "2",
   "frame_duration_ms": "32",
   "mel_bins": "128",
   "convert_phoneme": true,
   "shuffle_examples": true,
   "phoneme_max_len": "2000",
-  "dataset_dir": "Q:/self_pj/data_storage/output",
-  "viewer_time_steps": "2000",
+  "dataset_dir": "Q:/self_pj/data_storage/output_3",
+  "viewer_time_steps": "2200",
   "viewer_mel_bins": "128",
   "viewer_frame_duration": "32"
 }

@@ -31,6 +31,7 @@ class DatasetMetadata:
     time_steps: int
     feature_dim: int
     label_max_len: int | None
+    frames_per_step: int | None
     frame_duration_ms: float | None
     mel_bins: int | None
     extra: Mapping[str, object]
@@ -148,9 +149,16 @@ def _load_metadata(directory: Path, arrays: Mapping[str, np.memmap]) -> DatasetM
     if "y_labels" in arrays:
         label_max_len = int(arrays["y_labels"].shape[1])
 
+    frames_per_step_value: int | None = None
     frame_duration_value: float | None = None
     mel_bins_value: int | None = None
     if isinstance(data, dict):
+        frames_per_step = data.get("frames_per_step")
+        if frames_per_step is not None:
+            try:
+                frames_per_step_value = int(frames_per_step)
+            except (TypeError, ValueError):
+                frames_per_step_value = None
         frame_duration = data.get("frame_duration_ms")
         if frame_duration is not None:
             try:
@@ -169,6 +177,7 @@ def _load_metadata(directory: Path, arrays: Mapping[str, np.memmap]) -> DatasetM
         time_steps=time_steps,
         feature_dim=feature_dim,
         label_max_len=label_max_len,
+    frames_per_step=frames_per_step_value,
         frame_duration_ms=frame_duration_value,
         mel_bins=mel_bins_value,
         extra=data,

@@ -51,6 +51,7 @@ class DatasetApp(Tk):
         self.output_dir_var = StringVar(value=default_output)
         self.time_steps_var = StringVar(value="1000")
         self.label_len_var = StringVar(value="524")
+        self.frames_per_step_var = StringVar(value="1")
         self.convert_phoneme_var = BooleanVar(value=False)
         self.shuffle_var = BooleanVar(value=False)
         self.phoneme_len_var = StringVar(value="2000")
@@ -75,6 +76,7 @@ class DatasetApp(Tk):
             self.output_dir_var,
             self.time_steps_var,
             self.label_len_var,
+            self.frames_per_step_var,
             self.frame_duration_var,
             self.mel_bins_var,
             self.phoneme_len_var,
@@ -133,8 +135,11 @@ class DatasetApp(Tk):
         ttk.Label(length_frame, text="Максимальная длина метки:").grid(row=0, column=0, sticky="w", padx=(6, 6), pady=(6, 0))
         ttk.Entry(length_frame, textvariable=self.label_len_var, width=12).grid(row=0, column=1, sticky="w", pady=(6, 0))
 
+        ttk.Label(length_frame, text="Кадров на шаг модели:").grid(row=1, column=0, sticky="w", padx=(6, 6), pady=(6, 0))
+        ttk.Entry(length_frame, textvariable=self.frames_per_step_var, width=12).grid(row=1, column=1, sticky="w", pady=(6, 0))
+
         options_row = ttk.Frame(length_frame)
-        options_row.grid(row=1, column=0, columnspan=2, sticky="w", padx=(6, 6), pady=(8, 0))
+        options_row.grid(row=2, column=0, columnspan=2, sticky="w", padx=(6, 6), pady=(8, 0))
 
         phoneme_check = ttk.Checkbutton(
             options_row,
@@ -151,9 +156,9 @@ class DatasetApp(Tk):
         )
         shuffle_check.pack(side="left", padx=(16, 0))
 
-        ttk.Label(length_frame, text="Максимальная длина фонем:").grid(row=2, column=0, sticky="w", padx=(6, 6), pady=(6, 6))
+        ttk.Label(length_frame, text="Максимальная длина фонем:").grid(row=3, column=0, sticky="w", padx=(6, 6), pady=(6, 6))
         self.phoneme_len_entry = ttk.Entry(length_frame, textvariable=self.phoneme_len_var, width=12)
-        self.phoneme_len_entry.grid(row=2, column=1, sticky="w", pady=(6, 6))
+        self.phoneme_len_entry.grid(row=3, column=1, sticky="w", pady=(6, 6))
         self._toggle_phoneme_length_state()
 
         mel_frame = ttk.LabelFrame(form, text="Параметры мел-спектрограммы")
@@ -615,6 +620,7 @@ class DatasetApp(Tk):
             "output_dir": self.output_dir_var.get().strip(),
             "time_steps": self.time_steps_var.get().strip(),
             "label_max_len": self.label_len_var.get().strip(),
+            "frames_per_step": self.frames_per_step_var.get().strip(),
             "frame_duration_ms": self.frame_duration_var.get().strip(),
             "mel_bins": self.mel_bins_var.get().strip(),
             "convert_phoneme": bool(self.convert_phoneme_var.get()),
@@ -655,6 +661,7 @@ class DatasetApp(Tk):
             set_str(self.output_dir_var, "output_dir")
             set_str(self.time_steps_var, "time_steps")
             set_str(self.label_len_var, "label_max_len")
+            set_str(self.frames_per_step_var, "frames_per_step")
             set_str(self.frame_duration_var, "frame_duration_ms")
             set_str(self.mel_bins_var, "mel_bins")
             set_str(self.phoneme_len_var, "phoneme_max_len")
@@ -764,6 +771,7 @@ class DatasetApp(Tk):
         try:
             time_steps = int(self.time_steps_var.get())
             label_max = int(self.label_len_var.get())
+            frames_per_step = int(self.frames_per_step_var.get())
             mel_bins = int(self.mel_bins_var.get())
             frame_duration = float(self.frame_duration_var.get())
             phoneme_max = int(self.phoneme_len_var.get()) if self.convert_phoneme_var.get() else None
@@ -774,6 +782,7 @@ class DatasetApp(Tk):
         if (
             time_steps <= 0
             or label_max <= 0
+            or frames_per_step <= 0
             or mel_bins <= 0
             or frame_duration <= 0
             or (phoneme_max is not None and phoneme_max <= 0)
@@ -799,6 +808,7 @@ class DatasetApp(Tk):
             label_max_len=label_max,
             mel_bins=mel_bins,
             frame_duration_ms=frame_duration,
+            frames_per_step=frames_per_step,
             shuffle=self.shuffle_var.get(),
         )
 
