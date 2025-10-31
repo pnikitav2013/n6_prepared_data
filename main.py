@@ -52,6 +52,7 @@ class DatasetApp(Tk):
         self.time_steps_var = StringVar(value="1000")
         self.label_len_var = StringVar(value="524")
         self.frames_per_step_var = StringVar(value="1")
+        self.max_audio_duration_var = StringVar(value="")
         self.convert_phoneme_var = BooleanVar(value=False)
         self.shuffle_var = BooleanVar(value=False)
         self.phoneme_len_var = StringVar(value="2000")
@@ -77,6 +78,7 @@ class DatasetApp(Tk):
             self.time_steps_var,
             self.label_len_var,
             self.frames_per_step_var,
+            self.max_audio_duration_var,
             self.frame_duration_var,
             self.mel_bins_var,
             self.phoneme_len_var,
@@ -138,8 +140,22 @@ class DatasetApp(Tk):
         ttk.Label(length_frame, text="Кадров на шаг модели:").grid(row=1, column=0, sticky="w", padx=(6, 6), pady=(6, 0))
         ttk.Entry(length_frame, textvariable=self.frames_per_step_var, width=12).grid(row=1, column=1, sticky="w", pady=(6, 0))
 
+        ttk.Label(length_frame, text="Максимальная длина аудио (сек):").grid(
+            row=2,
+            column=0,
+            sticky="w",
+            padx=(6, 6),
+            pady=(6, 0),
+        )
+        ttk.Entry(length_frame, textvariable=self.max_audio_duration_var, width=12).grid(
+            row=2,
+            column=1,
+            sticky="w",
+            pady=(6, 0),
+        )
+
         options_row = ttk.Frame(length_frame)
-        options_row.grid(row=2, column=0, columnspan=2, sticky="w", padx=(6, 6), pady=(8, 0))
+        options_row.grid(row=3, column=0, columnspan=2, sticky="w", padx=(6, 6), pady=(8, 0))
 
         phoneme_check = ttk.Checkbutton(
             options_row,
@@ -156,9 +172,15 @@ class DatasetApp(Tk):
         )
         shuffle_check.pack(side="left", padx=(16, 0))
 
-        ttk.Label(length_frame, text="Максимальная длина фонем:").grid(row=3, column=0, sticky="w", padx=(6, 6), pady=(6, 6))
+        ttk.Label(length_frame, text="Максимальная длина фонем:").grid(
+            row=4,
+            column=0,
+            sticky="w",
+            padx=(6, 6),
+            pady=(6, 6),
+        )
         self.phoneme_len_entry = ttk.Entry(length_frame, textvariable=self.phoneme_len_var, width=12)
-        self.phoneme_len_entry.grid(row=3, column=1, sticky="w", pady=(6, 6))
+        self.phoneme_len_entry.grid(row=4, column=1, sticky="w", pady=(6, 6))
         self._toggle_phoneme_length_state()
 
         mel_frame = ttk.LabelFrame(form, text="Параметры мел-спектрограммы")
@@ -318,6 +340,11 @@ class DatasetApp(Tk):
         frame_duration_ms = None
         hop_length_samples: float | None = None
         shuffle_flag: bool | None = None
+        max_audio_frames_allowed: int | None = None
+        max_audio_frames_observed: int | None = None
+        max_audio_duration_ms: float | None = None
+        max_audio_duration_limit_s: float | None = None
+        max_observed_duration_s: float | None = None
         if os.path.exists(metadata_path):
             try:
                 with open(metadata_path, "r", encoding="utf-8") as meta_file:
@@ -355,6 +382,40 @@ class DatasetApp(Tk):
                             shuffle_flag = bool(metadata["shuffle"])
                         except Exception:
                             shuffle_flag = None
+                    if "max_audio_frames" in metadata:
+                        try:
+                            max_audio_frames_allowed = int(metadata["max_audio_frames"])
+                        except (TypeError, ValueError):
+                            max_audio_frames_allowed = None
+                    if "max_audio_duration_s" in metadata:
+                        try:
+                            max_audio_duration_limit_s = float(metadata["max_audio_duration_s"])
+                        except (TypeError, ValueError):
+                            max_audio_duration_limit_s = None
+                    if "max_audio_duration_ms" in metadata:
+                        try:
+                            value_ms = float(metadata["max_audio_duration_ms"])
+                        except (TypeError, ValueError):
+                            value_ms = None
+                        else:
+                            max_audio_duration_limit_s = value_ms / 1000.0
+                    if "max_observed_audio_frames" in metadata:
+                        try:
+                            max_audio_frames_observed = int(metadata["max_observed_audio_frames"])
+                        except (TypeError, ValueError):
+                            max_audio_frames_observed = None
+                    if "max_observed_audio_duration_ms" in metadata:
+                        try:
+                            max_audio_duration_ms = float(metadata["max_observed_audio_duration_ms"])
+                        except (TypeError, ValueError):
+                            max_audio_duration_ms = None
+                        else:
+                            max_observed_duration_s = max_audio_duration_ms / 1000.0
+                    if "max_observed_audio_duration_s" in metadata:
+                        try:
+                            max_observed_duration_s = float(metadata["max_observed_audio_duration_s"])
+                        except (TypeError, ValueError):
+                            pass
                 else:
                     self._log("metadata.json имеет некорректный формат.")
 
@@ -429,6 +490,20 @@ class DatasetApp(Tk):
             f"Файлы: {os.path.basename(x_path)}, {os.path.basename(x_len_path)}\n"
             f"Примеров: {sample_count} | Окно: {time_steps}x{feature_dim} | Кадр: {frame_info} мс{hop_suffix}"
         )
+        if max_audio_duration_limit_s is not None:
+            info += f" | Ограничение аудио: {max_audio_duration_limit_s:.2f} с"
+        elif max_audio_frames_allowed is not None:
+            info += f" | Ограничение аудио: {max_audio_frames_allowed}"
+            if frame_duration_ms is not None:
+                approx_limit = (max_audio_frames_allowed * frame_duration_ms) / 1000.0
+                info += f" (~{approx_limit:.2f} с)"
+        if max_observed_duration_s is not None:
+            info += f" | Макс. наблюд.: {max_observed_duration_s:.2f} с"
+        elif max_audio_frames_observed is not None:
+            info += f" | Макс. наблюд.: {max_audio_frames_observed}"
+            if frame_duration_ms is not None:
+                approx_observed = (max_audio_frames_observed * frame_duration_ms) / 1000.0
+                info += f" (~{approx_observed:.2f} с)"
         if shuffle_flag is not None:
             shuffle_text = "да" if shuffle_flag else "нет"
             info += f" | Перемешано: {shuffle_text}"
@@ -621,6 +696,7 @@ class DatasetApp(Tk):
             "time_steps": self.time_steps_var.get().strip(),
             "label_max_len": self.label_len_var.get().strip(),
             "frames_per_step": self.frames_per_step_var.get().strip(),
+            "max_audio_duration_s": self.max_audio_duration_var.get().strip(),
             "frame_duration_ms": self.frame_duration_var.get().strip(),
             "mel_bins": self.mel_bins_var.get().strip(),
             "convert_phoneme": bool(self.convert_phoneme_var.get()),
@@ -662,6 +738,10 @@ class DatasetApp(Tk):
             set_str(self.time_steps_var, "time_steps")
             set_str(self.label_len_var, "label_max_len")
             set_str(self.frames_per_step_var, "frames_per_step")
+            if "max_audio_duration_s" in data:
+                set_str(self.max_audio_duration_var, "max_audio_duration_s")
+            else:
+                set_str(self.max_audio_duration_var, "max_audio_frames")
             set_str(self.frame_duration_var, "frame_duration_ms")
             set_str(self.mel_bins_var, "mel_bins")
             set_str(self.phoneme_len_var, "phoneme_max_len")
@@ -768,10 +848,14 @@ class DatasetApp(Tk):
 
         root_dir = self.root_dir_var.get().strip()
         output_dir = self.output_dir_var.get().strip()
+        max_audio_duration_s: float | None = None
         try:
             time_steps = int(self.time_steps_var.get())
             label_max = int(self.label_len_var.get())
             frames_per_step = int(self.frames_per_step_var.get())
+            max_audio_duration_str = self.max_audio_duration_var.get().strip()
+            if max_audio_duration_str:
+                max_audio_duration_s = float(max_audio_duration_str)
             mel_bins = int(self.mel_bins_var.get())
             frame_duration = float(self.frame_duration_var.get())
             phoneme_max = int(self.phoneme_len_var.get()) if self.convert_phoneme_var.get() else None
@@ -783,6 +867,7 @@ class DatasetApp(Tk):
             time_steps <= 0
             or label_max <= 0
             or frames_per_step <= 0
+            or (max_audio_duration_s is not None and max_audio_duration_s <= 0)
             or mel_bins <= 0
             or frame_duration <= 0
             or (phoneme_max is not None and phoneme_max <= 0)
@@ -809,6 +894,7 @@ class DatasetApp(Tk):
             mel_bins=mel_bins,
             frame_duration_ms=frame_duration,
             frames_per_step=frames_per_step,
+            max_audio_duration_s=max_audio_duration_s,
             shuffle=self.shuffle_var.get(),
         )
 

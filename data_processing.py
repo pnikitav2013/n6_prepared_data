@@ -38,6 +38,7 @@ class DatasetConfig:
     frames_per_step: int = 1
     max_workers: int = 10
     shuffle: bool = False
+    max_audio_duration_s: float | None = None
 
 
 @dataclass(frozen=True)
@@ -181,6 +182,13 @@ def prepare_ctc_dataset(config: DatasetConfig, log: LogFn | None = None) -> int:
     if config.frames_per_step <= 0:
         raise DatasetPreparationError("Параметр frames_per_step должен быть положительным.")
     frames_per_step = int(config.frames_per_step)
+    if config.max_audio_duration_s is not None and config.max_audio_duration_s <= 0:
+        raise DatasetPreparationError("Параметр max_audio_duration_s должен быть положительным числом или None.")
+    max_audio_duration_ms: float | None = (
+        float(config.max_audio_duration_s) * 1000.0 if config.max_audio_duration_s is not None else None
+    )
+    frame_step_ms_value: float | None = None
+    max_observed_duration_ms: float = 0.0
 
     directories, librispeech_roots = _collect_librispeech_directories(config.root_dir)
     if not directories:
@@ -216,6 +224,20 @@ def prepare_ctc_dataset(config: DatasetConfig, log: LogFn | None = None) -> int:
     logger(f"Подготовка массива на {total_entries} примеров...")
 
     dropped_short_inputs = 0
+    dropped_exceeds_max_audio = 0
+    max_observed_frames = 0
+
+    def _frame_step_from_params(params: dict[str, float] | None) -> float | None:
+        if not params:
+            return float(config.frame_duration_ms) if config.frame_duration_ms is not None else None
+        for key in ("effective_frame_duration_ms", "window_duration_ms", "requested_frame_duration_ms"):
+            value = params.get(key)
+            if value is not None:
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    continue
+        return float(config.frame_duration_ms) if config.frame_duration_ms is not None else None
 
     first_valid_index: int | None = None
     first_spec_params: dict[str, float] | None = None
@@ -231,7 +253,25 @@ def prepare_ctc_dataset(config: DatasetConfig, log: LogFn | None = None) -> int:
             frame_duration_ms=config.frame_duration_ms,
             return_params=True,
         )
-        effective_length = _effective_logit_length(spectrogram.shape[0], frames_per_step)
+        spec_length = spectrogram.shape[0]
+        frame_step_candidate = _frame_step_from_params(spec_params)
+        if frame_step_candidate is not None:
+            frame_step_ms_value = frame_step_candidate
+        if max_audio_duration_ms is not None:
+            if frame_step_ms_value is None:
+                raise DatasetPreparationError(
+                    "Не удалось определить длительность кадра для проверки ограничения по длительности аудио."
+                )
+            sample_duration_ms = spec_length * frame_step_ms_value
+            if sample_duration_ms > max_audio_duration_ms:
+                dropped_exceeds_max_audio += 1
+                logger(
+                    f"Пропуск образца '{sample_name}': длительность {sample_duration_ms / 1000.0:.2f} с превышает максимум {config.max_audio_duration_s:.2f} с."
+                )
+                continue
+        else:
+            sample_duration_ms = spec_length * frame_step_ms_value if frame_step_ms_value is not None else None
+        effective_length = _effective_logit_length(spec_length, frames_per_step)
         if effective_length < len(tokens):
             dropped_short_inputs += 1
             logger(
@@ -243,6 +283,10 @@ def prepare_ctc_dataset(config: DatasetConfig, log: LogFn | None = None) -> int:
         first_spectrogram = spectrogram
         first_tokens = tokens
         first_name = sample_name
+        if spec_length > max_observed_frames:
+            max_observed_frames = spec_length
+        if sample_duration_ms is not None and sample_duration_ms > max_observed_duration_ms:
+            max_observed_duration_ms = sample_duration_ms
         break
 
     if first_valid_index is None or first_spectrogram is None or first_tokens is None or first_name is None:
@@ -274,6 +318,7 @@ def prepare_ctc_dataset(config: DatasetConfig, log: LogFn | None = None) -> int:
     sample_names = open_memmap(names_path, mode="w+", dtype="S128", shape=(total_entries,))
 
     def write_sample(index: int, spectrogram: np.ndarray, tokens: Sequence[int], sample_name: str) -> None:
+        nonlocal max_observed_frames
         if spectrogram.shape[0] > config.time_steps:
             raise DatasetPreparationError(
                 f"Пример {index + 1}: спектрограмма длиной {spectrogram.shape[0]} превышает окно {config.time_steps}."
@@ -289,6 +334,8 @@ def prepare_ctc_dataset(config: DatasetConfig, log: LogFn | None = None) -> int:
         x_input_length[index] = spectrogram.shape[0]
         y_label_length[index] = len(tokens)
         sample_names[index] = sample_name.encode("utf-8", "ignore")
+        if spectrogram.shape[0] > max_observed_frames:
+            max_observed_frames = spectrogram.shape[0]
 
     write_position = 0
     write_sample(write_position, first_spectrogram, first_tokens, first_name)
@@ -315,7 +362,22 @@ def prepare_ctc_dataset(config: DatasetConfig, log: LogFn | None = None) -> int:
                     mel_bins=mel_bins,
                     frame_duration_ms=frame_duration_ms,
                 )
-                effective_length = _effective_logit_length(spectrogram.shape[0], frames_per_step)
+                spec_length = spectrogram.shape[0]
+                sample_duration_ms = spec_length * frame_step_ms_value if frame_step_ms_value is not None else None
+                if max_audio_duration_ms is not None:
+                    if frame_step_ms_value is None:
+                        raise DatasetPreparationError(
+                            "Не удалось определить длительность кадра для проверки ограничения по длительности аудио."
+                        )
+                    if sample_duration_ms is None:
+                        sample_duration_ms = spec_length * frame_step_ms_value
+                    if sample_duration_ms > max_audio_duration_ms:
+                        dropped_exceeds_max_audio += 1
+                        logger(
+                            f"Пропуск образца '{sample_name}': длительность {sample_duration_ms / 1000.0:.2f} с превышает максимум {config.max_audio_duration_s:.2f} с."
+                        )
+                        continue
+                effective_length = _effective_logit_length(spec_length, frames_per_step)
                 if effective_length < len(tokens):
                     dropped_short_inputs += 1
                     logger(
@@ -323,6 +385,8 @@ def prepare_ctc_dataset(config: DatasetConfig, log: LogFn | None = None) -> int:
                     )
                     continue
                 write_sample(write_position, spectrogram, tokens, sample_name)
+                if sample_duration_ms is not None and sample_duration_ms > max_observed_duration_ms:
+                    max_observed_duration_ms = sample_duration_ms
                 write_position += 1
         else:
             with ProcessPoolExecutor(max_workers=worker_count) as executor:
@@ -333,7 +397,22 @@ def prepare_ctc_dataset(config: DatasetConfig, log: LogFn | None = None) -> int:
                 ):
                     if (index + 1) % 100 == 0 or index + 1 == total_entries:
                         logger(f"Обработано {index + 1} / {total_entries} файлов...")
-                    effective_length = _effective_logit_length(spectrogram.shape[0], frames_per_step)
+                    spec_length = spectrogram.shape[0]
+                    sample_duration_ms = spec_length * frame_step_ms_value if frame_step_ms_value is not None else None
+                    if max_audio_duration_ms is not None:
+                        if frame_step_ms_value is None:
+                            raise DatasetPreparationError(
+                                "Не удалось определить длительность кадра для проверки ограничения по длительности аудио."
+                            )
+                        if sample_duration_ms is None:
+                            sample_duration_ms = spec_length * frame_step_ms_value
+                        if sample_duration_ms > max_audio_duration_ms:
+                            dropped_exceeds_max_audio += 1
+                            logger(
+                                f"Пропуск образца '{sample_name}': длительность {sample_duration_ms / 1000.0:.2f} с превышает максимум {config.max_audio_duration_s:.2f} с."
+                            )
+                            continue
+                    effective_length = _effective_logit_length(spec_length, frames_per_step)
                     if effective_length < len(tokens):
                         dropped_short_inputs += 1
                         logger(
@@ -341,6 +420,8 @@ def prepare_ctc_dataset(config: DatasetConfig, log: LogFn | None = None) -> int:
                         )
                         continue
                     write_sample(write_position, spectrogram, tokens, sample_name)
+                    if sample_duration_ms is not None and sample_duration_ms > max_observed_duration_ms:
+                        max_observed_duration_ms = sample_duration_ms
                     write_position += 1
 
     x_data.flush()
@@ -368,9 +449,12 @@ def prepare_ctc_dataset(config: DatasetConfig, log: LogFn | None = None) -> int:
         _shrink_npy_file(x_len_path, "int64", (valid_samples,))
         _shrink_npy_file(y_len_path, "int64", (valid_samples,))
         _shrink_npy_file(names_path, "S128", (valid_samples,))
-        logger(
-            f"Удалено {total_entries - valid_samples} примеров с короткой входной последовательностью."
-        )
+        removed_total = total_entries - valid_samples
+        logger(f"Удалено {removed_total} примеров, не прошедших фильтры.")
+        if dropped_short_inputs:
+            logger(f"  - {dropped_short_inputs} из-за короткой входной последовательности.")
+        if dropped_exceeds_max_audio:
+            logger(f"  - {dropped_exceeds_max_audio} из-за превышения максимальной длины аудио.")
 
     metadata_path = os.path.join(config.output_dir, "metadata.json")
     metadata = {
@@ -382,10 +466,30 @@ def prepare_ctc_dataset(config: DatasetConfig, log: LogFn | None = None) -> int:
         "sample_count": valid_samples,
         "shuffle": bool(config.shuffle),
     }
+    if config.max_audio_duration_s is not None:
+        metadata["max_audio_duration_s"] = float(config.max_audio_duration_s)
+        if max_audio_duration_ms is not None:
+            metadata["max_audio_duration_ms"] = float(max_audio_duration_ms)
     if first_spec_params:
         metadata["spectrogram_params"] = first_spec_params
+    frame_step_ms = frame_step_ms_value
+    if frame_step_ms is None and first_spec_params:
+        frame_step_ms = _frame_step_from_params(first_spec_params)
+    if frame_step_ms is None and config.frame_duration_ms is not None:
+        frame_step_ms = float(config.frame_duration_ms)
+    if max_observed_frames:
+        metadata["max_observed_audio_frames"] = int(max_observed_frames)
+    if max_observed_duration_ms and max_observed_duration_ms > 0:
+        metadata["max_observed_audio_duration_ms"] = float(max_observed_duration_ms)
+        metadata["max_observed_audio_duration_s"] = float(max_observed_duration_ms / 1000.0)
+    elif frame_step_ms is not None and max_observed_frames:
+        computed = float(max_observed_frames * frame_step_ms)
+        metadata["max_observed_audio_duration_ms"] = computed
+        metadata["max_observed_audio_duration_s"] = computed / 1000.0
     if dropped_short_inputs:
         metadata["dropped_shorter_than_label"] = dropped_short_inputs
+    if dropped_exceeds_max_audio:
+        metadata["dropped_longer_than_max_audio"] = dropped_exceeds_max_audio
     try:
         with open(metadata_path, "w", encoding="utf-8") as meta_file:
             json.dump(metadata, meta_file, ensure_ascii=False, indent=2)
