@@ -73,3 +73,7 @@ deactivate
 
 
 python -m nltk.downloader averaged_perceptron_tagger cmudict
+
+
+python3 -m pip install requests
+pip freeze > requirements.txt

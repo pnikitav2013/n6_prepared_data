@@ -1,0 +1,15 @@
+{
+  "root_dir": "Q:/self_pj/data_storage",
+  "output_dir": "Q:/self_pj/data_storage/output/128_10ms_12S_test",
+  "time_steps": 5000,
+  "label_max_len": 624,
+  "frames_per_step": 2,
+  "max_audio_duration_s": 12,
+  "frame_duration_ms": 10,
+  "mel_bins": 96,
+  "convert_phoneme": true,
+  "shuffle_examples": true,
+  "phoneme_max_len": 300,
+  "phoneme_output_suffix": "_phoneme",
+  "max_workers": 10
+}
