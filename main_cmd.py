@@ -176,7 +176,23 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "--phoneme-dataset-dir",
         help="Директория с подготовленным датасетом для фонемной конвертации.",
     )
-    parser.set_defaults(convert_phoneme=None, shuffle_examples=None)
+    parser.add_argument(
+        "--phoneme-lexicon-path",
+        help="Путь к пользовательскому лексикону (формат CMU).",
+    )
+    parser.add_argument(
+        "--phoneme-use-lexicon",
+        dest="phoneme_use_lexicon",
+        action="store_true",
+        help="Принудительно использовать лексикон при конвертации фонем (включено по умолчанию).",
+    )
+    parser.add_argument(
+        "--phoneme-disable-lexicon",
+        dest="phoneme_use_lexicon",
+        action="store_false",
+        help="Не использовать лексикон, всегда применять g2p_en.",
+    )
+    parser.set_defaults(convert_phoneme=None, shuffle_examples=None, phoneme_use_lexicon=None)
     return parser
 
 
@@ -239,6 +255,13 @@ def merge_parameters(args: argparse.Namespace, config: dict[str, Any]) -> tuple[
 
     phoneme_config: PhonemeConfig | None = None
     if convert_flag:
+        phoneme_use_lexicon = _pick(
+            "phoneme_use_lexicon",
+            args.phoneme_use_lexicon,
+            config,
+            _parse_bool,
+            key="phoneme_use_lexicon",
+        )
         phoneme_max_len = _pick(
             "phoneme_max_len",
             args.phoneme_max_len,
@@ -259,16 +282,26 @@ def merge_parameters(args: argparse.Namespace, config: dict[str, Any]) -> tuple[
             _parse_str,
             key="phoneme_dataset_dir",
         )
+        phoneme_lexicon_path = _pick(
+            "phoneme_lexicon_path",
+            args.phoneme_lexicon_path,
+            config,
+            _parse_str,
+            key="phoneme_lexicon_path",
+        )
         if phoneme_max_len is None:
             phoneme_max_len = 2000
         else:
             _validate_positive(phoneme_max_len, "phoneme_max_len")
         output_suffix = phoneme_suffix if phoneme_suffix is not None else "_phoneme"
         dataset_dir_for_phoneme = phoneme_dataset_dir if phoneme_dataset_dir is not None else output_dir
+        use_lexicon_flag = phoneme_use_lexicon if phoneme_use_lexicon is not None else True
         phoneme_config = PhonemeConfig(
             dataset_dir=dataset_dir_for_phoneme,
             output_suffix=output_suffix,
             max_phoneme_len=phoneme_max_len,
+            lexicon_path=phoneme_lexicon_path,
+            use_lexicon=use_lexicon_flag,
         )
 
     return dataset_config, phoneme_config
@@ -293,6 +326,13 @@ def _print_effective_settings(dataset_config: DatasetConfig, phoneme_config: Pho
         print(f"    Целевая папка: {phoneme_config.dataset_dir}")
         print(f"    Суффикс файлов: {phoneme_config.output_suffix}")
         print(f"    Максимум фонем: {phoneme_config.max_phoneme_len}")
+        print(
+            "    Использовать лексикон: "
+            f"{'да' if phoneme_config.use_lexicon else 'нет'}"
+        )
+        if phoneme_config.use_lexicon:
+            lexicon_label = phoneme_config.lexicon_path or "встроенный CMU лексикон"
+            print(f"    Лексикон: {lexicon_label}")
     else:
         print("  Фонемы: нет")
     _print_separator()

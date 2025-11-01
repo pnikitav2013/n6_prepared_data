@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Callable, Iterator, Sequence, Tuple
 
 import numpy as np
@@ -48,6 +50,8 @@ class PhonemeConfig:
     dataset_dir: str
     output_suffix: str = "_phoneme"
     max_phoneme_len: int = 2000
+    lexicon_path: str | None = None
+    use_lexicon: bool = True
 
 
 # Canonical CMU phoneme inventory with leading blank token for CTC.
@@ -78,6 +82,40 @@ PHONEMES: Sequence[str] = (
     "Y", "Z", "ZH",
     "'",
 )
+
+_LEXICON_FILENAME = "librispeech-lexicon.txt"
+_WORD_PATTERN = re.compile(r"[a-z']+")
+
+
+@lru_cache(maxsize=None)
+def _load_librispeech_lexicon(path: str) -> dict[str, tuple[str, ...]]:
+    lexicon: dict[str, tuple[str, ...]] = {}
+    with open(path, "r", encoding="utf-8") as lex_file:
+        for line in lex_file:
+            line = line.strip()
+            if not line or line.startswith(";") or line.startswith("#"):
+                continue
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            word = parts[0].lower()
+            if not word or word in lexicon:
+                continue
+            lexicon[word] = tuple(parts[1:])
+    return lexicon
+
+
+def _phonemes_from_lexicon(text: str, lexicon: dict[str, tuple[str, ...]]) -> list[str] | None:
+    words = _WORD_PATTERN.findall(text.lower())
+    if not words:
+        return []
+    result: list[str] = []
+    for word in words:
+        pronunciation = lexicon.get(word)
+        if pronunciation is None:
+            return None
+        result.extend(pronunciation)
+    return result
 
 class DatasetPreparationError(RuntimeError):
     """Base error raised when dataset preparation fails."""
@@ -523,6 +561,56 @@ def convert_dataset_to_phonemes(
             "Пакет g2p_en не установлен. Установите его командой 'pip install g2p_en'."
         ) from exc
 
+    try:
+        import nltk
+    except ImportError as exc:  # pragma: no cover - informative path only
+        raise DatasetPreparationError(
+            "Пакет nltk не установлен. Установите его командой 'pip install nltk'."
+        ) from exc
+
+    def _ensure_nltk_resource(resource_name: str, resource_path: str) -> None:
+        """Download required NLTK assets lazily to satisfy g2p_en dependencies."""
+
+        try:
+            nltk.data.find(resource_path)
+            return
+        except LookupError:
+            pass
+        if not nltk.download(resource_name, quiet=True):
+            raise DatasetPreparationError(
+                f"Не удалось автоматически загрузить ресурс NLTK '{resource_name}'."
+            )
+        try:
+            nltk.data.find(resource_path)
+        except LookupError as exc:  # pragma: no cover - informative path only
+            raise DatasetPreparationError(
+                f"Ресурс NLTK '{resource_name}' по-прежнему недоступен после загрузки."
+            ) from exc
+
+    _ensure_nltk_resource("averaged_perceptron_tagger_eng", "taggers/averaged_perceptron_tagger_eng")
+
+    lexicon_data: dict[str, tuple[str, ...]] | None = None
+    if config.use_lexicon:
+        lexicon_candidate = config.lexicon_path
+        if not lexicon_candidate:
+            lexicon_candidate = os.path.join(os.path.dirname(__file__), _LEXICON_FILENAME)
+        lexicon_candidate = os.path.abspath(lexicon_candidate)
+        if os.path.exists(lexicon_candidate):
+            try:
+                lexicon_data = _load_librispeech_lexicon(lexicon_candidate)
+                if not lexicon_data:
+                    logger(
+                        f"Предупреждение: лексикон {lexicon_candidate} пуст, фонемы будет считать g2p_en."
+                    )
+            except OSError as exc:
+                logger(
+                    f"Предупреждение: не удалось прочитать лексикон {lexicon_candidate}: {exc}. Фонемы будет считать g2p_en."
+                )
+        else:
+            logger(
+                f"Предупреждение: лексикон {lexicon_candidate} не найден, фонемы будет считать g2p_en."
+            )
+
     dataset_dir = config.dataset_dir
     y_path = os.path.join(dataset_dir, "y_labels.npy")
     y_len_path = os.path.join(dataset_dir, "y_label_length.npy")
@@ -566,11 +654,23 @@ def convert_dataset_to_phonemes(
     )
 
     processed = 0
+    lexicon_hits = 0
+    lexicon_misses = 0
     for idx in range(sample_count):
         label_length = int(y_label_length[idx])
         token_sequence = y_labels[idx, :label_length]
         text = detokenize_text_with_space_train(token_sequence)
-        phoneme_seq = g2p(text)
+        phoneme_seq: Sequence[str]
+        if lexicon_data is not None:
+            lex_pron = _phonemes_from_lexicon(text, lexicon_data)
+            if lex_pron is not None:
+                phoneme_seq = lex_pron
+                lexicon_hits += 1
+            else:
+                phoneme_seq = g2p(text)
+                lexicon_misses += 1
+        else:
+            phoneme_seq = g2p(text)
         encoded = encode_phonemes(phoneme_seq)
         if encoded.shape[0] > config.max_phoneme_len:
             raise DatasetPreparationError(
@@ -585,6 +685,12 @@ def convert_dataset_to_phonemes(
 
     y_labels_phoneme.flush()
     y_label_length_phoneme.flush()
+
+    if lexicon_data is not None and sample_count:
+        logger(
+            "Фонемы: словарь обработал "
+            f"{lexicon_hits} примеров, g2p_en потребовался для {lexicon_misses}."
+        )
 
     logger("Фонемные файлы сохранены:")
     logger(f"  {phoneme_y_path}")
