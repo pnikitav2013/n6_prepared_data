@@ -69,6 +69,10 @@ python -m venv venv
 
 venv\Scripts\Activate.ps1
 venv\Scripts\activate.bat
+
+docker
+source .venv/bin/activate
+
 deactivate
 
 
