@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Скрипт скачивает и распаковывает train-clean-100.tar.gz
 # Использование: ./load_dataset_small.sh /path/to/destination
-#   ./cmd/chmod +x load_dataset_small.sh
+#   chmod +x ./cmd/load_dataset_small.sh
 #   ./cmd/load_dataset_small.sh /path/to/destination
 
 # По умолчанию скачивается https://www.openslr.org/resources/12/train-clean-100.tar.gz
