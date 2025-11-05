@@ -81,3 +81,5 @@ python -m nltk.downloader averaged_perceptron_tagger cmudict
 
 c
 pip freeze > requirements.txt
+
+![alt text](image-1.png)

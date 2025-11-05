@@ -1,6 +1,6 @@
 {
   "root_dir": "Q:/self_pj/data_storage",
-  "output_dir": "Q:/self_pj/data_storage/output/128_10ms_12S",
+  "output_dir": "Q:/self_pj/data_storage/output/cloud",
   "time_steps": "5000",
   "label_max_len": "624",
   "frames_per_step": "2",
@@ -10,7 +10,7 @@
   "convert_phoneme": true,
   "shuffle_examples": true,
   "phoneme_max_len": "300",
-  "dataset_dir": "Q:/self_pj/data_storage/output/128_10ms_12S_test",
+  "dataset_dir": "Q:/self_pj/data_storage/output/cloud",
   "viewer_time_steps": "5000",
   "viewer_mel_bins": "96",
   "viewer_frame_duration": "10"

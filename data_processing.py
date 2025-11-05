@@ -110,11 +110,13 @@ def _phonemes_from_lexicon(text: str, lexicon: dict[str, tuple[str, ...]]) -> li
     if not words:
         return []
     result: list[str] = []
-    for word in words:
+    for idx, word in enumerate(words):
         pronunciation = lexicon.get(word)
         if pronunciation is None:
             return None
         result.extend(pronunciation)
+        if idx + 1 < len(words):
+            result.append(" ")
     return result
 
 class DatasetPreparationError(RuntimeError):
