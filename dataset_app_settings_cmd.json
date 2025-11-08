@@ -1,6 +1,6 @@
 {
-  "root_dir": "/workspace/input",
-  "output_dir": "/data/output/128_10ms_12S_test_2d",
+  "root_dir": "./../../data/input/1",
+  "output_dir": "./../../data/output/1",
   "time_steps": 5000,
   "label_max_len": 624,
   "frames_per_step": 2,

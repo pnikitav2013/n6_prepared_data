@@ -8,8 +8,8 @@ set -euo pipefail
 
 # По умолчанию скачивается https://www.openslr.org/resources/12/train-clean-100.tar.gz
 
-# ARCHIVE_URL_DEFAULT="https://www.openslr.org/resources/12/train-clean-100.tar.gz"
-ARCHIVE_URL_DEFAULT="https://www.openslr.org/resources/12/test-clean.tar.gz"
+ARCHIVE_URL_DEFAULT="https://www.openslr.org/resources/12/train-clean-100.tar.gz"
+# ARCHIVE_URL_DEFAULT="https://www.openslr.org/resources/12/test-clean.tar.gz"
 print_usage() {
 	cat <<EOF
 Использование: $(basename "$0") DEST_DIR [--keep-archive]
