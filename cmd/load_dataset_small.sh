@@ -8,8 +8,8 @@ set -euo pipefail
 
 # По умолчанию скачивается https://www.openslr.org/resources/12/train-clean-100.tar.gz
 
-# ARCHIVE_URL_DEFAULT="https://www.openslr.org/resources/12/train-clean-100.tar.gz"
-ARCHIVE_URL_DEFAULT="https://www.openslr.org/resources/12/test-clean.tar.gz"
+ARCHIVE_URL_DEFAULT="https://www.openslr.org/resources/12/train-clean-360.tar.gz"
+# ARCHIVE_URL_DEFAULT="https://www.openslr.org/resources/12/test-clean.tar.gz"
 print_usage() {
 	cat <<EOF
 Использование: $(basename "$0") DEST_DIR [--keep-archive]
@@ -47,12 +47,8 @@ else
 	DESTDIR="$(cd "$DESTDIR" && pwd)"
 fi
 
-# Use a temporary working directory for download
-TMPDIR=$(mktemp -d)
-trap 'rm -rf "$TMPDIR"' EXIT
-
-echo "Downloading $ARCHIVE_URL to temporary folder..."
-cd "$TMPDIR"
+echo "Downloading $ARCHIVE_URL to destination folder..."
+cd "$DESTDIR"
 
 if command -v wget >/dev/null 2>&1; then
 	wget -c "$ARCHIVE_URL" -O "$ARCHIVE_NAME"
@@ -63,7 +59,7 @@ else
 	exit 2
 fi
 
-echo "Скачано: $TMPDIR/$ARCHIVE_NAME"
+echo "Скачано: $DESTDIR/$ARCHIVE_NAME"
 echo "Распаковка в: $DESTDIR"
 
 # Extract into destination directory
@@ -74,4 +70,3 @@ if [ "$KEEP_ARCHIVE" = false ]; then
 fi
 
 echo "Готово. Содержимое распаковано в: $DESTDIR"
-
