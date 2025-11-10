@@ -69,11 +69,17 @@ python -m venv venv
 
 venv\Scripts\Activate.ps1
 venv\Scripts\activate.bat
+
+docker
+source .venv/bin/activate
+
 deactivate
 
 
 python -m nltk.downloader averaged_perceptron_tagger cmudict
 
 
-python3 -m pip install requests
+c
 pip freeze > requirements.txt
+
+![alt text](image-1.png)

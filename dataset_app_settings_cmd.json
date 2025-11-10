@@ -1,6 +1,6 @@
 {
-  "root_dir": "Q:/self_pj/data_storage",
-  "output_dir": "Q:/self_pj/data_storage/output/128_10ms_12S_test",
+  "root_dir": "/workspace/input",
+  "output_dir": "/data/output/128_10ms_12S_test_2d",
   "time_steps": 5000,
   "label_max_len": 624,
   "frames_per_step": 2,
@@ -11,5 +11,5 @@
   "shuffle_examples": true,
   "phoneme_max_len": 300,
   "phoneme_output_suffix": "_phoneme",
-  "max_workers": 10
+  "max_workers": 22
 }

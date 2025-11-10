@@ -64,6 +64,9 @@ class DatasetApp(Tk):
         self.sample_name_var = StringVar()
         self.transcript_var = StringVar()
         self.phonemes_var = StringVar()
+        self.transcript_len_var = StringVar(value="Длина текста: -")
+        self.phonemes_len_var = StringVar(value="Длина фонем: -")
+        self.phonemes_raw_var = StringVar()
         self.viewer_time_steps_var = StringVar(value="1000")
         self.viewer_mel_bins_var = StringVar(value="128")
         self.viewer_frame_duration_var = StringVar(value="")
@@ -277,10 +280,16 @@ class DatasetApp(Tk):
         ttk.Label(text_frame, text="Транскрипт:").pack(anchor="w")
         self.transcript_text = ScrolledText(text_frame, height=2, wrap="word", state="disabled")
         self.transcript_text.pack(fill="x", expand=False, pady=(2, 4))
+        ttk.Label(text_frame, textvariable=self.transcript_len_var).pack(anchor="w", pady=(0, 4))
 
         ttk.Label(text_frame, text="Фонемы:").pack(anchor="w", pady=(6, 0))
         self.phonemes_text = ScrolledText(text_frame, height=3, wrap="word", state="disabled")
         self.phonemes_text.pack(fill="x", expand=False, pady=(2, 0))
+        ttk.Label(text_frame, textvariable=self.phonemes_len_var).pack(anchor="w", pady=(0, 0))
+
+        ttk.Label(text_frame, text="Фонемы (индексы):").pack(anchor="w", pady=(6, 0))
+        self.phonemes_raw_text = ScrolledText(text_frame, height=2, wrap="word", state="disabled")
+        self.phonemes_raw_text.pack(fill="x", expand=False, pady=(2, 0))
 
     def _choose_dataset_dir(self) -> None:
         selected = filedialog.askdirectory(title="Выберите папку с подготовленными данными")
@@ -526,10 +535,15 @@ class DatasetApp(Tk):
         self.sample_name_var.set("")
         self.transcript_var.set("")
         self.phonemes_var.set("")
+        self.transcript_len_var.set("Длина текста: -")
+        self.phonemes_len_var.set("Длина фонем: -")
+        self.phonemes_raw_var.set("")
         if hasattr(self, "transcript_text"):
             self._set_text_widget(self.transcript_text, "")
         if hasattr(self, "phonemes_text"):
             self._set_text_widget(self.phonemes_text, "")
+        if hasattr(self, "phonemes_raw_text"):
+            self._set_text_widget(self.phonemes_raw_text, "")
         self.axes.clear()
         self.axes.set_title("Нет данных")
         self.axes.axis("off")
@@ -595,10 +609,15 @@ class DatasetApp(Tk):
             self.sample_name_var.set("Датасет не загружен")
             self.transcript_var.set("Датасет не загружен")
             self.phonemes_var.set("")
+            self.transcript_len_var.set("Длина текста: -")
+            self.phonemes_len_var.set("Длина фонем: -")
+            self.phonemes_raw_var.set("")
             if hasattr(self, "transcript_text"):
                 self._set_text_widget(self.transcript_text, "Датасет не загружен")
             if hasattr(self, "phonemes_text"):
                 self._set_text_widget(self.phonemes_text, "")
+            if hasattr(self, "phonemes_raw_text"):
+                self._set_text_widget(self.phonemes_raw_text, "")
             return
 
         sample_names = self.loaded_dataset.get("sample_names")
@@ -614,6 +633,8 @@ class DatasetApp(Tk):
         else:
             self.sample_name_var.set("(нет имени)")
 
+        transcript_display = ""
+        transcript_len_display = "Длина текста: -"
         labels = self.loaded_dataset.get("labels")
         label_lengths = self.loaded_dataset.get("label_lengths")
         if labels is not None and label_lengths is not None and index < len(label_lengths):
@@ -621,22 +642,24 @@ class DatasetApp(Tk):
                 length = int(label_lengths[index])
                 tokens = labels[index, :length]
                 text = detokenize_text_with_space_train(tokens)
-                self.transcript_var.set(text or "(пусто)")
-                if hasattr(self, "transcript_text"):
-                    self._set_text_widget(self.transcript_text, text or "(пусто)")
+                transcript_display = text or "(пусто)"
+                char_count = len(text or "")
+                transcript_len_display = f"Длина текста: {length} токенов ({char_count} символов)"
             except Exception as exc:
-                self.transcript_var.set(f"Ошибка чтения транскрипта: {exc}")
-                if hasattr(self, "transcript_text"):
-                    self._set_text_widget(self.transcript_text, f"Ошибка чтения транскрипта: {exc}")
+                transcript_display = f"Ошибка чтения транскрипта: {exc}"
         elif labels is None:
-            self.transcript_var.set("Файл y_labels.npy не найден")
-            if hasattr(self, "transcript_text"):
-                self._set_text_widget(self.transcript_text, "Файл y_labels.npy не найден")
+            transcript_display = "Файл y_labels.npy не найден"
         else:
-            self.transcript_var.set("Нет транскрипта для этого образца")
-            if hasattr(self, "transcript_text"):
-                self._set_text_widget(self.transcript_text, "Нет транскрипта для этого образца")
+            transcript_display = "Нет транскрипта для этого образца"
 
+        self.transcript_var.set(transcript_display)
+        if hasattr(self, "transcript_text"):
+            self._set_text_widget(self.transcript_text, transcript_display)
+        self.transcript_len_var.set(transcript_len_display)
+
+        phoneme_display = ""
+        phoneme_len_display = "Длина фонем: -"
+        raw_phoneme_display = ""
         phoneme_labels = self.loaded_dataset.get("phoneme_labels")
         phoneme_lengths = self.loaded_dataset.get("phoneme_lengths")
         if phoneme_labels is not None and phoneme_lengths is not None and index < len(phoneme_lengths):
@@ -644,30 +667,38 @@ class DatasetApp(Tk):
                 length = int(phoneme_lengths[index])
                 seq = phoneme_labels[index, :length]
                 decoded = []
+                raw_values: list[str] = []
                 for value in seq:
                     token = int(value)
                     if token <= 0:
                         continue
+                    raw_values.append(str(token))
                     symbol = PHONEME_INDEX_TO_SYMBOL.get(token)
                     if symbol is None:
                         decoded.append(f"?{token}")
                     else:
                         decoded.append(symbol)
-                self.phonemes_var.set(" ".join(decoded) or "(пусто)")
-                if hasattr(self, "phonemes_text"):
-                    self._set_text_widget(self.phonemes_text, " ".join(decoded) or "(пусто)")
+                phoneme_string = " ".join(decoded)
+                phoneme_display = phoneme_string or "(пусто)"
+                phoneme_len_display = f"Длина фонем: {len(decoded)}"
+                raw_phoneme_display = " ".join(raw_values) or "(пусто)"
             except Exception as exc:
-                self.phonemes_var.set(f"Ошибка чтения фонем: {exc}")
-                if hasattr(self, "phonemes_text"):
-                    self._set_text_widget(self.phonemes_text, f"Ошибка чтения фонем: {exc}")
+                phoneme_display = f"Ошибка чтения фонем: {exc}"
+                raw_phoneme_display = phoneme_display
         elif phoneme_labels is None:
-            self.phonemes_var.set("Файл фонем не найден")
-            if hasattr(self, "phonemes_text"):
-                self._set_text_widget(self.phonemes_text, "Файл фонем не найден")
+            phoneme_display = "Файл фонем не найден"
+            raw_phoneme_display = phoneme_display
         else:
-            self.phonemes_var.set("Нет фонем для этого образца")
-            if hasattr(self, "phonemes_text"):
-                self._set_text_widget(self.phonemes_text, "Нет фонем для этого образца")
+            phoneme_display = "Нет фонем для этого образца"
+            raw_phoneme_display = phoneme_display
+
+        self.phonemes_var.set(phoneme_display)
+        if hasattr(self, "phonemes_text"):
+            self._set_text_widget(self.phonemes_text, phoneme_display)
+        self.phonemes_len_var.set(phoneme_len_display)
+        self.phonemes_raw_var.set(raw_phoneme_display)
+        if hasattr(self, "phonemes_raw_text"):
+            self._set_text_widget(self.phonemes_raw_text, raw_phoneme_display)
 
     def _set_text_widget(self, widget: ScrolledText, text: str) -> None:
         widget.configure(state="normal")

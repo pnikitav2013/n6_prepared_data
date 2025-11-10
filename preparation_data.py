@@ -9,7 +9,13 @@ from typing import Tuple
 
 import librosa
 import numpy as np
-import sounddevice as sd
+
+try:
+    import sounddevice as sd  # type: ignore
+    _SOUNDDEVICE_ERROR: Exception | None = None
+except (ImportError, OSError) as exc:
+    sd = None  # type: ignore[assignment]
+    _SOUNDDEVICE_ERROR = exc
 
 
 def _resolve_spectrogram_params(
@@ -93,6 +99,13 @@ def process_audio_and_text_nornalize(
 def process_audio_and_record():
     duration = 1  # seconds
     sr = 16000  # Sample rate
+
+    if sd is None:
+        raise RuntimeError(
+            "sounddevice is unavailable. Install PortAudio (e.g. 'sudo apt-get install libportaudio2') "
+            "and reinstall sounddevice to enable microphone recording."
+        ) from _SOUNDDEVICE_ERROR
+
     while True:
         # Запись аудио с микрофона
         audio = sd.rec(int(duration * sr), samplerate=sr, channels=1)
